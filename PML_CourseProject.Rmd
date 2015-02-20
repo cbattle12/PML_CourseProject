@@ -1,0 +1,91 @@
+## Practical ML Course Project: HAR Weight Lifting Dataset  
+
+### Summary
+
+For this project I used the HAR Weight Lifting Dataset to build a predictor to detect variations in several weightlifting exercises, in order to determine if the exercise was being performed correctly or not. I trained a random forest model on the training data and determined the out-of-sample error with 3-fold cross validation. The predictor was tested against a testing dataset of 20 observations and succeeded in correctly classifying all of them.  
+
+### Preprocessing the data  
+
+The Human Activity Recognition Weightlifting dataset (http://groupware.les.inf.puc-rio.br/har) was downloaded and moved to the R working directory. This data consists of multiple body-mounted sensor measurements of a host of different motion data, e.g. accelerometer measurements. The participants in this experiment were told to perform a weightlifting exercise, such as a bicep curl, either correctly or with one of four incorrect variations. My goal was to build a predictor to distinguish between these variations. The data was loaded as shown in the code below. I first checked for variables that had near-zero variance and removed them from the training and testing sets, under the assumption that these would help little for classification and could lead to overfitting. This removed all of the aggregate variables, such as kurtosis and standard deviation, describing the distributions collected in a particular time window. While these could conceivably be useful variables, and could be helpful in a building a faster/more minimal model, in the below analysis I achieved good accuracy without them. Following this step, I removed columns that were more than 10% missing values (NAs). The rationale for this step was that columns with large numbers of missing values contained little information and imputing their missing values would be difficult. In practice, all the columns were almost entirely NAs or had none, so this step left only columns containing no missing values. This was essential because the random forest algorithm I used for classification can't handle NAs and any remaining NA values would have needed to have their values imputed. Finally, I removed the first six columns, corresponding to observation label, name of the participant, window number, and time and date stamps. I surmised that these variables, except for the participant, shouldn't have an effect on classification. The participant may well have an effect on classification, but since I want to classify the types of motions across different subject, I removed this information to avoid overfitting. In the end this leaves me with a set of 52 features to build my model on. Below I plot the distributions of 4 representative variables (dumbell acceleration) colored by their label, as an example of the differences between the different motion classes.  
+
+```{r, cache = T, warning = F}
+## load libraries and data, find near-zero variance values
+library(caret);library(ggplot2);library(randomForest);library(gridExtra)
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+nsv <- nearZeroVar(training, saveMetrics = T)
+
+## now shorten training and test sets to get rid of near-zero variance variables. 
+## note that this gets rid of the aggregate variables (kurtosis, std, etc.) that 
+## start at each new time window
+training <- training[!nsv$nzv]
+testing <- testing[!nsv$nzv]
+
+## throw out columns that are mostly NAs, as they contain no usable
+## info and can't be handled by various ML algos. only keep columns 
+## with fewer than 10% NAs. in practice this gets rid of all the 
+## columns containing NAs, so we don't have to impute values
+naCount = numeric()
+for (i in 1:100){naCount[i] <- length(training[,i][is.na(training[,i])])}
+training <- training[naCount < nrow(training)/10]
+testing <- testing[naCount < nrow(training)/10]
+
+## finally get rid of the first 6 columns containing information about the timestamp, 
+## window number, user, etc. as they shouldn't be relevant and lead to overfitting
+training <- training[,7:ncol(training)]
+testing <- testing[,7:ncol(testing)]
+
+## for some reason these columns aren't numeric in the testing data set and are in
+## the training set. this causes problems later in fitting the rf model. change here
+## to make the class of the columns consistent between the training/testing sets
+testing$magnet_dumbbell_z = as.numeric(testing$magnet_dumbbell_z)
+testing$magnet_forearm_z = as.numeric(testing$magnet_forearm_z)
+testing$magnet_forearm_y = as.numeric(testing$magnet_forearm_y)
+
+## plot several variables colored by class to see their distributions
+p1 <- qplot(training$accel_dumbbell_x, fill = training$classe, xlab = "X dumbell accel.", 
+            binwidth = 20)  + guides(fill=guide_legend(title=NULL))
+p2 <- qplot(training$accel_dumbbell_y, fill = training$classe, xlab = "Y dumbell accel.", 
+            binwidth = 30)  + guides(fill=guide_legend(title=NULL))
+p3 <- qplot(training$accel_dumbbell_z, fill = training$classe, xlab = "Z dumbell accel.", 
+            binwidth = 30)  + guides(fill=guide_legend(title=NULL))
+p4 <- qplot(training$total_accel_dumbbell, fill = training$classe, xlab = "Total dumbell accel.", 
+            binwidth = 5)  + guides(fill=guide_legend(title=NULL))
+grid.arrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+```  
+
+Next I built a random forest classifier using the caret package. I chose to use a random forest classifier because they are very accurate across a range of diverse problems. Their main drawback is that they are computationally expensive, and thus slow, but for this analysis I prioritized accuracy over speed. To estimate my out-of-sample error I split the training set into 3 folds to do 3-fold cross validation. This yielded an out-of-sample error estimate of 0.52%.  
+
+```{r, cache = T}
+set.seed(888)
+
+## below i fit a random forest model to the training data. first i do
+## k-fold cross validation with three folds to estimate out-of-sample error.
+## chose 3 folds due to the large computational load from fitting multiple
+## random forest models
+folds <- createFolds(y=training$classe, k = 3, list = T)
+cvAccuracy = numeric()
+for (i in 1:3){
+        tr <- training[-folds[[i]],]
+        cv <- training[folds[[i]],]
+        mdl <- randomForest(classe ~ ., data = tr, proximity = T)
+        cvAccuracy[i] <- confusionMatrix(predict(mdl,cv),cv$classe)$overall[[1]]
+        rm(tr);rm(cv);rm(mdl)
+        print(i)
+}
+
+## Out-of-sample error estimate
+1-mean(cvAccuracy)
+```
+
+Finally, I trained the final prediction model on the entire training set and used it to predict the labels for the test set. The error estimate on the training set is 0.29%, lower than my estimated out-of-sample error, as expected. When the model predictions were compared to the 20 labels of the test set, the model correctly predicted all the labels.   
+
+*Note: Below the final model fitting step is commented out in the code. This is due to a conflict when compiling the Rmd with knitr within the randomForest package. If uncommented and run in a terminal there is no error. The output of the "finalModel" variable shows the fitted model parameters.*
+
+```{r, cache = T}
+## fit final model on entire training set
+# finalModel <- randomForest(classe ~ ., data = training, proximity = T)
+finalModel
+answers <- predict(finalModel, training[,1:52])
+```
+
